@@ -1,0 +1,643 @@
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+if CoreGui:FindFirstChild("VoxelUtilityUI") then
+	CoreGui.VoxelUtilityUI:Destroy()
+end
+
+local espEnabled = false
+local autoHealEnabled = false
+local isMeteorRunning = false
+local supernovaAimActive = false
+local isSupernovaRunning = false
+local isBossSpawned = false
+local healConn = nil
+local activeBossModel = nil
+
+-- ฟังก์ชัน ESP
+local function applyHighlight(character)
+	if not character then return end
+	local existing = character:FindFirstChild("VoxelESP_Highlight")
+	if espEnabled then
+		if not existing then
+			local highlight = Instance.new("Highlight")
+			highlight.Name = "VoxelESP_Highlight"
+			highlight.FillColor = Color3.fromRGB(255, 60, 60)
+			highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+			highlight.FillTransparency = 0.5
+			highlight.OutlineTransparency = 0
+			highlight.Adornee = character
+			highlight.Parent = character
+		end
+	else
+		if existing then
+			existing:Destroy()
+		end
+	end
+end
+
+local function updateAllESP()
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character then
+			applyHighlight(player.Character)
+		end
+	end
+end
+
+local function setupPlayer(player)
+	if player == LocalPlayer then return end
+	player.CharacterAdded:Connect(function(char)
+		char:WaitForChild("HumanoidRootPart", 10)
+		applyHighlight(char)
+	end)
+end
+
+for _, player in ipairs(Players:GetPlayers()) do
+	setupPlayer(player)
+end
+Players.PlayerAdded:Connect(setupPlayer)
+
+-- ฟังก์ชันรีเซ็ตเลือดฝั่ง Local
+local function refillLocalHealth()
+	local char = LocalPlayer.Character
+	local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		if humanoid.MaxHealth <= 0 then
+			humanoid.MaxHealth = 100
+		end
+		if humanoid.Health < humanoid.MaxHealth then
+			humanoid.Health = humanoid.MaxHealth
+		end
+	end
+end
+
+local function bindAutoHeal(character)
+	if healConn then
+		healConn:Disconnect()
+		healConn = nil
+	end
+	local humanoid = character and character:WaitForChild("Humanoid", 10)
+	if not humanoid then return end
+
+	healConn = humanoid.HealthChanged:Connect(function(newHealth)
+		if autoHealEnabled and newHealth < humanoid.MaxHealth then
+			task.defer(function()
+				if autoHealEnabled and humanoid and humanoid.Parent then
+					humanoid.Health = humanoid.MaxHealth
+				end
+			end)
+		end
+	end)
+end
+
+if LocalPlayer.Character then
+	bindAutoHeal(LocalPlayer.Character)
+end
+LocalPlayer.CharacterAdded:Connect(bindAutoHeal)
+
+-- สร้างหน้าต่าง UI หลัก
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "VoxelUtilityUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = CoreGui
+
+-- แบนเนอร์ฝนดาวตก (Local)
+local MeteorBanner = Instance.new("TextLabel")
+MeteorBanner.Size = UDim2.new(0, 320, 0, 48)
+MeteorBanner.Position = UDim2.new(0.5, -160, 0.12, 0)
+MeteorBanner.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+MeteorBanner.BackgroundTransparency = 0.15
+MeteorBanner.Text = "meteor shower!"
+MeteorBanner.TextColor3 = Color3.fromRGB(255, 190, 50)
+MeteorBanner.Font = Enum.Font.GothamBlack
+MeteorBanner.TextSize = 24
+MeteorBanner.Visible = false
+MeteorBanner.Parent = ScreenGui
+
+local MeteorBannerCorner = Instance.new("UICorner")
+MeteorBannerCorner.CornerRadius = UDim.new(0, 10)
+MeteorBannerCorner.Parent = MeteorBanner
+
+-- แบนเนอร์ซูเปอร์โนวา (Local)
+local NovaBanner = Instance.new("TextLabel")
+NovaBanner.Size = UDim2.new(0, 420, 0, 58)
+NovaBanner.Position = UDim2.new(0.5, -210, 0.2, 0)
+NovaBanner.BackgroundColor3 = Color3.fromRGB(18, 12, 32)
+NovaBanner.BackgroundTransparency = 0.1
+NovaBanner.Text = "The developer destroyed it!"
+NovaBanner.TextColor3 = Color3.fromRGB(120, 220, 255)
+NovaBanner.Font = Enum.Font.GothamBlack
+NovaBanner.TextSize = 26
+NovaBanner.Visible = false
+NovaBanner.Parent = ScreenGui
+
+local NovaBannerCorner = Instance.new("UICorner")
+NovaBannerCorner.CornerRadius = UDim.new(0, 12)
+NovaBannerCorner.Parent = NovaBanner
+
+-- แบนเนอร์บอสปรากฏตัว (Local)
+local BossBanner = Instance.new("TextLabel")
+BossBanner.Size = UDim2.new(0, 360, 0, 54)
+BossBanner.Position = UDim2.new(0.5, -180, 0.16, 0)
+BossBanner.BackgroundColor3 = Color3.fromRGB(45, 10, 15)
+BossBanner.BackgroundTransparency = 0.1
+BossBanner.Text = "boss appeared"
+BossBanner.TextColor3 = Color3.fromRGB(255, 75, 75)
+BossBanner.Font = Enum.Font.GothamBlack
+BossBanner.TextSize = 28
+BossBanner.Visible = false
+BossBanner.Parent = ScreenGui
+
+local BossBannerCorner = Instance.new("UICorner")
+BossBannerCorner.CornerRadius = UDim.new(0, 12)
+BossBannerCorner.Parent = BossBanner
+
+-- ตัวชี้จุดเล็งซูเปอร์โนวาบนพื้น (Local)
+local aimRing = Instance.new("Part")
+aimRing.Name = "SupernovaAimMarker"
+aimRing.Shape = Enum.PartType.Cylinder
+aimRing.Size = Vector3.new(0.4, 24, 24)
+aimRing.Material = Enum.Material.Neon
+aimRing.Color = Color3.fromRGB(80, 210, 255)
+aimRing.Transparency = 0.45
+aimRing.Anchored = true
+aimRing.CanCollide = false
+aimRing.CastShadow = false
+aimRing.Parent = nil
+
+-- ฟังก์ชันระเบิดพื้นที่ (ไม่ทำดาเมจกับตัวละครเราเอง)
+local function detonateArea(position, radius, force, destroyBlocks)
+	local exp = Instance.new("Explosion")
+	exp.Position = position
+	exp.BlastRadius = radius
+	exp.BlastPressure = force
+	exp.DestroyJointRadiusPercent = 0
+	exp.Parent = workspace
+
+	local myChar = LocalPlayer.Character
+	local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+	local prevHealth = myHum and myHum.Health
+
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	if myChar then
+		params.FilterDescendantsInstances = {myChar, aimRing, activeBossModel}
+	else
+		params.FilterDescendantsInstances = {aimRing, activeBossModel}
+	end
+
+	local parts = workspace:GetPartBoundsInRadius(position, radius, params)
+	for _, part in ipairs(parts) do
+		if part:IsA("BasePart") and not part.Locked then
+			if destroyBlocks and part.Size.Magnitude < 120 then
+				part.Anchored = false
+				part:BreakJoints()
+			end
+		end
+	end
+
+	if myHum and prevHealth and myHum.Health < prevHealth then
+		myHum.Health = prevHealth
+	end
+end
+
+-- ฟังก์ชันฝนดาวตก: ต้องตกถึงพื้นหรือชนตึกก่อนค่อยระเบิด
+local function triggerMeteorShower()
+	if isMeteorRunning then return end
+	isMeteorRunning = true
+
+	MeteorBanner.Visible = true
+	task.delay(3.5, function()
+		if MeteorBanner then
+			MeteorBanner.Visible = false
+		end
+	end)
+
+	local endTime = os.clock() + 10
+	task.spawn(function()
+		while os.clock() < endTime do
+			for _ = 1, 3 do
+				local char = LocalPlayer.Character
+				local root = char and char:FindFirstChild("HumanoidRootPart")
+				if root then
+					local spreadX = math.random(-105, 105)
+					local spreadZ = math.random(-105, 105)
+					local spawnPos = root.Position + Vector3.new(spreadX + math.random(-20, 20), 115, spreadZ + math.random(-20, 20))
+					local fallDir = (Vector3.new(root.Position.X + spreadX, root.Position.Y - 30, root.Position.Z + spreadZ) - spawnPos).Unit
+
+					local meteor = Instance.new("Part")
+					meteor.Shape = Enum.PartType.Ball
+					meteor.Size = Vector3.new(4.5, 4.5, 4.5)
+					meteor.Material = Enum.Material.Neon
+					meteor.Color = Color3.fromRGB(255, 90, 15)
+					meteor.Position = spawnPos
+					meteor.Anchored = true
+					meteor.CanCollide = false
+					meteor.Parent = workspace
+
+					task.spawn(function()
+						local speed = 125
+						local maxLife = 3.5
+						local elapsed = 0
+
+						while meteor.Parent and elapsed < maxLife do
+							local dt = RunService.RenderStepped:Wait()
+							elapsed += dt
+
+							local stepDist = speed * dt
+							local rayParams = RaycastParams.new()
+							rayParams.FilterType = Enum.RaycastFilterType.Exclude
+							rayParams.FilterDescendantsInstances = {meteor, aimRing, LocalPlayer.Character, activeBossModel}
+
+							local hit = workspace:Raycast(meteor.Position, fallDir * (stepDist + 1.5), rayParams)
+							if hit then
+								meteor.Position = hit.Position
+								detonateArea(hit.Position, 26, 900000, true)
+								meteor:Destroy()
+								break
+							else
+								meteor.Position += fallDir * stepDist
+							end
+						end
+
+						if meteor.Parent then
+							meteor:Destroy()
+						end
+					end)
+				end
+			end
+			task.wait(0.16)
+		end
+		isMeteorRunning = false
+	end)
+end
+
+-- ฟังก์ชันจุดเล็งและเสกซูเปอร์โนวา
+local function getAimTargetPosition()
+	local viewportCenter = Vector2.new(Camera.ViewportSize.X * 0.5, Camera.ViewportSize.Y * 0.5)
+	local ray = Camera:ViewportPointToRay(viewportCenter.X, viewportCenter.Y)
+
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = {aimRing, LocalPlayer.Character, activeBossModel}
+
+	local result = workspace:Raycast(ray.Origin, ray.Direction * 1200, rayParams)
+	if result then
+		return result.Position
+	end
+	return ray.Origin + ray.Direction * 300
+end
+
+local function triggerSupernova(targetPos)
+	if isSupernovaRunning then return end
+	isSupernovaRunning = true
+	supernovaAimActive = false
+	aimRing.Parent = nil
+
+	NovaBanner.Visible = true
+	task.delay(4.5, function()
+		if NovaBanner then
+			NovaBanner.Visible = false
+		end
+	end)
+
+	local originalCameraType = Camera.CameraType
+	local originalCFrame = Camera.CFrame
+	Camera.CameraType = Enum.CameraType.Scriptable
+
+	local novaCore = Instance.new("Part")
+	novaCore.Shape = Enum.PartType.Ball
+	novaCore.Size = Vector3.new(6, 6, 6)
+	novaCore.Material = Enum.Material.Neon
+	novaCore.Color = Color3.fromRGB(140, 230, 255)
+	novaCore.Position = targetPos + Vector3.new(0, 75, 0)
+	novaCore.Anchored = true
+	novaCore.CanCollide = false
+	novaCore.Parent = workspace
+
+	local shockwave = Instance.new("Part")
+	shockwave.Shape = Enum.PartType.Ball
+	shockwave.Size = Vector3.new(8, 8, 8)
+	shockwave.Material = Enum.Material.ForceField
+	shockwave.Color = Color3.fromRGB(90, 200, 255)
+	shockwave.Position = targetPos
+	shockwave.Anchored = true
+	shockwave.CanCollide = false
+	shockwave.Transparency = 0.35
+	shockwave.Parent = workspace
+
+	task.spawn(function()
+		local elapsed = 0
+		local duration = 2.6
+		while elapsed < duration do
+			local dt = RunService.RenderStepped:Wait()
+			elapsed += dt
+
+			local progress = math.clamp(elapsed / duration, 0, 1)
+			novaCore.Position = (targetPos + Vector3.new(0, 75, 0)):Lerp(targetPos, progress)
+			novaCore.Size = Vector3.new(6, 6, 6) + Vector3.new(28, 28, 28) * progress
+
+			local waveScale = 8 + (150 * progress)
+			shockwave.Size = Vector3.new(waveScale, waveScale, waveScale)
+			shockwave.Transparency = math.clamp(0.35 + progress * 0.6, 0, 1)
+
+			local camPos = targetPos + Vector3.new(math.cos(elapsed * 1.4) * 95, 58, math.sin(elapsed * 1.4) * 95)
+			local shake = Vector3.new(math.random(-2, 2), math.random(-2, 2), math.random(-2, 2)) * 0.4
+			Camera.CFrame = CFrame.lookAt(camPos + shake, targetPos)
+
+			if progress >= 0.65 then
+				detonateArea(targetPos, 95, 2500000, true)
+			end
+		end
+
+		detonateArea(targetPos, 110, 3000000, true)
+		novaCore:Destroy()
+		shockwave:Destroy()
+
+		Camera.CameraType = originalCameraType
+		Camera.CFrame = originalCFrame
+		isSupernovaRunning = false
+	end)
+end
+
+-- ฟังก์ชันเสกบอสทหารกลางแมพ (Local Preview: เลือด 3,000 + ปืนดาเมจ 200 + คัดซีน + ป้าย "บอส")
+local function spawnSoldierBoss()
+	if isBossSpawned then return end
+	isBossSpawned = true
+
+	if activeBossModel then
+		activeBossModel:Destroy()
+		activeBossModel = nil
+	end
+
+	local spawnOrigin = Vector3.new(0, 12, 0)
+	local groundRay = workspace:Raycast(Vector3.new(0, 120, 0), Vector3.new(0, -250, 0))
+	if groundRay then
+		spawnOrigin = groundRay.Position + Vector3.new(0, 4, 0)
+	end
+
+	local bossModel = Instance.new("Model")
+	bossModel.Name = "SoldierBoss_Local"
+	activeBossModel = bossModel
+
+	local root = Instance.new("Part")
+	root.Name = "HumanoidRootPart"
+	root.Size = Vector3.new(2.6, 3.2, 1.5)
+	root.Position = spawnOrigin
+	root.Anchored = false
+	root.Material = Enum.Material.SmoothPlastic
+	root.Color = Color3.fromRGB(65, 85, 50)
+	root.Parent = bossModel
+
+	local torso = Instance.new("Part")
+	torso.Name = "Torso"
+	torso.Size = Vector3.new(2.6, 2.8, 1.4)
+	torso.Position = spawnOrigin
+	torso.Material = Enum.Material.SmoothPlastic
+	torso.Color = Color3.fromRGB(75, 95, 55)
+	torso.Parent = bossModel
+
+	local head = Instance.new("Part")
+	head.Name = "Head"
+	head.Size = Vector3.new(1.8, 1.8, 1.8)
+	head.Position = spawnOrigin + Vector3.new(0, 2.4, 0)
+	head.Material = Enum.Material.SmoothPlastic
+	head.Color = Color3.fromRGB(220, 175, 135)
+	head.Parent = bossModel
+
+	-- หมวกทหาร
+	local helmet = Instance.new("Part")
+	helmet.Name = "Helmet"
+	helmet.Shape = Enum.PartType.Ball
+	helmet.Size = Vector3.new(2.1, 1.5, 2.1)
+	helmet.Position = head.Position + Vector3.new(0, 0.45, 0)
+	helmet.Material = Enum.Material.Metal
+	helmet.Color = Color3.fromRGB(48, 62, 38)
+	helmet.Parent = bossModel
+
+	-- ปืนของบอส (ดาเมจตั้งค่าไว้ 200)
+	local gunPart = Instance.new("Part")
+	gunPart.Name = "BossRifle"
+	gunPart.Size = Vector3.new(0.45, 0.65, 3.4)
+	gunPart.Position = torso.Position + Vector3.new(1.4, 0.2, -1.3)
+	gunPart.Material = Enum.Material.Metal
+	gunPart.Color = Color3.fromRGB(35, 35, 40)
+	gunPart.Parent = bossModel
+
+	local weldRootTorso = Instance.new("WeldConstraint")
+	weldRootTorso.Part0 = root
+	weldRootTorso.Part1 = torso
+	weldRootTorso.Parent = root
+
+	local weldTorsoHead = Instance.new("WeldConstraint")
+	weldTorsoHead.Part0 = torso
+	weldTorsoHead.Part1 = head
+	weldTorsoHead.Parent = torso
+
+	local weldHeadHelmet = Instance.new("WeldConstraint")
+	weldHeadHelmet.Part0 = head
+	weldHeadHelmet.Part1 = helmet
+	weldHeadHelmet.Parent = head
+
+	local weldTorsoGun = Instance.new("WeldConstraint")
+	weldTorsoGun.Part0 = torso
+	weldTorsoGun.Part1 = gunPart
+	weldTorsoGun.Parent = torso
+
+	local humanoid = Instance.new("Humanoid")
+	humanoid.MaxHealth = 3000
+	humanoid.Health = 3000
+	humanoid.WalkSpeed = 16
+	humanoid.Parent = bossModel
+
+	local bossDamage = 200
+	bossModel:SetAttribute("BossDamage", bossDamage)
+
+	-- ป้ายคำว่า "บอส" และหลอดเลือด 3,000 บนหัวชัดเจน
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "BossTag"
+	billboard.Size = UDim2.new(0, 220, 0, 74)
+	billboard.StudsOffset = Vector3.new(0, 5.2, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Parent = head
+
+	local bossLabel = Instance.new("TextLabel")
+	bossLabel.Size = UDim2.new(1, 0, 0, 36)
+	bossLabel.Position = UDim2.new(0, 0, 0, 0)
+	bossLabel.BackgroundTransparency = 1
+	bossLabel.Text = "บอส"
+	bossLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+	bossLabel.TextStrokeTransparency = 0
+	bossLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	bossLabel.Font = Enum.Font.GothamBlack
+	bossLabel.TextSize = 30
+	bossLabel.Parent = billboard
+
+	local hpText = Instance.new("TextLabel")
+	hpText.Size = UDim2.new(1, 0, 0, 22)
+	hpText.Position = UDim2.new(0, 0, 0, 38)
+	hpText.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+	hpText.BackgroundTransparency = 0.25
+	hpText.Text = "HP: 3000 / 3000 | DMG: 200"
+	hpText.TextColor3 = Color3.fromRGB(255, 220, 120)
+	hpText.Font = Enum.Font.GothamBold
+	hpText.TextSize = 13
+	hpText.Parent = billboard
+
+	local hpCorner = Instance.new("UICorner")
+	hpCorner.CornerRadius = UDim.new(0, 6)
+	hpCorner.Parent = hpText
+
+	bossModel.PrimaryPart = root
+	bossModel.Parent = workspace
+
+	-- ข้อความ boss appeared และคัดซีนเปิดตัวบอส
+	BossBanner.Visible = true
+	task.delay(3.5, function()
+		if BossBanner then
+			BossBanner.Visible = false
+		end
+	end)
+
+	local originalCameraType = Camera.CameraType
+	local originalCFrame = Camera.CFrame
+	Camera.CameraType = Enum.CameraType.Scriptable
+
+	task.spawn(function()
+		local introElapsed = 0
+		local introDuration = 2.2
+		while introElapsed < introDuration and bossModel.Parent do
+			local dt = RunService.RenderStepped:Wait()
+			introElapsed += dt
+			local angle = introElapsed * 1.6
+			local camOffset = Vector3.new(math.cos(angle) * 22, 8, math.sin(angle) * 22)
+			Camera.CFrame = CFrame.lookAt(root.Position + camOffset, root.Position + Vector3.new(0, 1.5, 0))
+		end
+
+		Camera.CameraType = originalCameraType
+		Camera.CFrame = originalCFrame
+
+		-- ลูปบอสหันเล็งและยิงเอฟเฟกต์กระสุน (ดาเมจ 200)
+		while bossModel.Parent and humanoid.Health > 0 do
+			hpText.Text = string.format("HP: %d / %d | DMG: %d", math.max(0, math.floor(humanoid.Health)), math.floor(humanoid.MaxHealth), bossDamage)
+
+			local nearestTargetPos = nil
+			local shortestDist = 220
+
+			for _, plr in ipairs(Players:GetPlayers()) do
+				local char = plr.Character
+				local targetRoot = char and char:FindFirstChild("HumanoidRootPart")
+				local targetHum = char and char:FindFirstChildOfClass("Humanoid")
+				if targetRoot and targetHum and targetHum.Health > 0 then
+					local d = (targetRoot.Position - root.Position).Magnitude
+					if d < shortestDist then
+						shortestDist = d
+						nearestTargetPos = targetRoot.Position
+					end
+				end
+			end
+
+			if nearestTargetPos then
+				local lookPos = Vector3.new(nearestTargetPos.X, root.Position.Y, nearestTargetPos.Z)
+				root.CFrame = CFrame.lookAt(root.Position, lookPos)
+
+				local muzzlePos = gunPart.Position + gunPart.CFrame.LookVector * 1.8
+				local dist = (nearestTargetPos - muzzlePos).Magnitude
+				if dist > 2 then
+					local tracer = Instance.new("Part")
+					tracer.Anchored = true
+					tracer.CanCollide = false
+					tracer.Material = Enum.Material.Neon
+					tracer.Color = Color3.fromRGB(255, 90, 40)
+					tracer.Size = Vector3.new(0.25, 0.25, math.min(dist, 220))
+					tracer.CFrame = CFrame.lookAt(muzzlePos, nearestTargetPos) * CFrame.new(0, 0, -math.min(dist, 220) / 2)
+					tracer.Parent = workspace
+					Debris:AddItem(tracer, 0.14)
+				end
+			end
+
+			task.wait(0.85)
+		end
+
+		if bossModel.Parent then
+			bossModel:Destroy()
+		end
+		if activeBossModel == bossModel then
+			activeBossModel = nil
+		end
+		isBossSpawned = false
+	end)
+end
+
+-- อัปเดตตำแหน่งวงเล็งซูเปอร์โนวา
+RunService.RenderStepped:Connect(function()
+	if supernovaAimActive and not isSupernovaRunning then
+		local pos = getAimTargetPosition()
+		aimRing.Parent = workspace
+		aimRing.CFrame = CFrame.new(pos + Vector3.new(0, 0.25, 0)) * CFrame.Angles(0, 0, math.rad(90))
+	else
+		aimRing.Parent = nil
+	end
+end)
+
+-- ปุ่มลอยสำหรับยืนยันจุดปล่อยซูเปอร์โนวา
+local FireNovaBtn = Instance.new("TextButton")
+FireNovaBtn.Size = UDim2.new(0, 190, 0, 44)
+FireNovaBtn.Position = UDim2.new(0.5, -95, 0.78, 0)
+FireNovaBtn.BackgroundColor3 = Color3.fromRGB(30, 140, 220)
+FireNovaBtn.Text = "ปล่อยซูเปอร์โนวา!"
+FireNovaBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+FireNovaBtn.Font = Enum.Font.GothamBold
+FireNovaBtn.TextSize = 15
+FireNovaBtn.Visible = false
+FireNovaBtn.Parent = ScreenGui
+
+local FireNovaCorner = Instance.new("UICorner")
+FireNovaCorner.CornerRadius = UDim.new(0, 10)
+FireNovaCorner.Parent = FireNovaBtn
+
+-- หน้าต่างควบคุมหลัก
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 245, 0, 338)
+MainFrame.Position = UDim2.new(0.5, -122, 0.2, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -30, 0, 30)
+Title.Position = UDim2.new(0, 10, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "Voxel Front Helper"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = MainFrame
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 26, 0, 26)
+CloseBtn.Position = UDim2.new(1, -29, 0, 3)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 13
+CloseBtn.Parent = MainFrame
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 6)
+CloseCorner.Parent = CloseBtn
+
+local ModeBtn = Instance.new("
